@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import video
+from app.routes import video, feeder
 from app.routes.sensors import send_sensor_realtime, send_sensor_hourly
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -10,13 +10,14 @@ scheduler = BackgroundScheduler()
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # allow all origins (can restrict later)
-    allow_methods=["*"],   # allow all HTTP methods
-    allow_headers=["*"],   # allow all headers
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Include video routes
 app.include_router(video.video_route)
+app.include_router(feeder.feeder_route)
 
 # ------------------------
 # Schedule Jobs
@@ -26,15 +27,17 @@ scheduler.add_job(
     "interval",
     seconds=3,
     max_instances=1,
-    coalesce=True
+    coalesce=True,
+    replace_existing=True
 )
 
 scheduler.add_job(
-    send_sensor_hourly,
+    send_sensor_hourly,   # fixed, was send_sensor_realtime before
     "interval",
     hours=1,
     max_instances=1,
-    coalesce=True
+    coalesce=True,
+    replace_existing=True
 )
 
-#scheduler.start()
+scheduler.start()
