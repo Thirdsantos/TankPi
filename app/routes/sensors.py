@@ -1,18 +1,18 @@
 import sys
-import time
 import os
-import requests
 
-# Add root project directory to import path (adjust as needed)
+# Add project root to sys.path so 'app' can be imported
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
-# Imports from your own modules
-from run import aquarium  # this holds your aquarium ID
-from sensor import read_sensors  # function to read real sensor data
+import time
+import requests
+
+from app.services.sensor import read_sensors
+from run import aquarium  # make sure 'run.py' is also importable from root
 
 def send_sensor_realtime():
     url = f"https://aquacare-5cyr.onrender.com/{aquarium}/sensors"
-    sensor = read_sensors()  # fetch real data
+    sensor = read_sensors()
     try:
         response = requests.post(url, json=sensor, timeout=5)
         print(f"[REALTIME] Sent: {sensor} | Status: {response.status_code}")
@@ -21,7 +21,7 @@ def send_sensor_realtime():
 
 def send_sensor_hourly():
     url = f"https://aquacare-5cyr.onrender.com/{aquarium}/hourly_log"
-    sensor = read_sensors()  # fetch real data
+    sensor = read_sensors()
     try:
         response = requests.post(url, json=sensor, timeout=5)
         print(f"[HOURLY] Sent: {sensor} | Status: {response.status_code}")
@@ -36,7 +36,6 @@ if __name__ == "__main__":
     while True:
         send_sensor_realtime()
 
-        # Send hourly data every 60 minutes
         minutes_passed += 1
         if minutes_passed >= 60:
             send_sensor_hourly()
