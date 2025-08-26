@@ -13,7 +13,7 @@ async def feeder(websocket: WebSocket):
       switch = data["status"]
 
       if switch:
-        print("Auto feeder is on")
+        print("Auto feeder is on") # put the auto feedin on function here
       else:
         print("Auto feeder is off")
       
