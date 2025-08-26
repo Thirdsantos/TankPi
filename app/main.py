@@ -15,7 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include video routes
+
 app.include_router(video.video_route)
 app.include_router(feeder.feeder_route)
 
@@ -32,7 +32,7 @@ scheduler.add_job(
 )
 
 scheduler.add_job(
-    send_sensor_hourly,   # fixed, was send_sensor_realtime before
+    send_sensor_hourly, 
     "interval",
     hours=1,
     max_instances=1,

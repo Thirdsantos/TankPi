@@ -1,10 +1,10 @@
 from run import aquarium  # this holds your aquarium ID
-from sensor import read_sensors  # function to read real sensor data
+# from sensor import read_sensors  # function to read real sensor data
 import requests
 
 def send_sensor_realtime():
     url = f"https://aquacare-5cyr.onrender.com/{aquarium}/sensors"
-    sensor = read_sensors()  # fetch real data
+    sensor = {"ph": 1, "temperature" : 1, "turbidity" : 1}  # fetch real data
     try:
         response = requests.post(url, json=sensor, timeout=5)
         print(f"[REALTIME] Sent: {sensor} | Status: {response.status_code}")
@@ -13,7 +13,7 @@ def send_sensor_realtime():
 
 def send_sensor_hourly():
     url = f"https://aquacare-5cyr.onrender.com/{aquarium}/hourly_log"
-    sensor = read_sensors()  # fetch real data
+    sensor =  {"ph": 1, "temperature" : 1, "turbidity" : 1} # fetch real data
     try:
         response = requests.post(url, json=sensor, timeout=5)
         print(f"[HOURLY] Sent: {sensor} | Status: {response.status_code}")
