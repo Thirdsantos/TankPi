@@ -50,7 +50,7 @@ async def generate_frames():
 
 
 
-@video_route.get(f"/aquarium/{aquarium}/video_feed", dependencies=[Depends(verify_key)])
+@video_route.get(f"/aquarium/{aquarium}/video_feed")
 async def video_feed():
     global camera_switch
 
