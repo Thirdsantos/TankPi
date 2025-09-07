@@ -18,8 +18,8 @@ def voltage_to_ph(ph_voltage):
     return round(7 + ((ph_voltage - 2.5) / 0.167), 2)
 
 def voltage_to_turbidity(voltage):
-    turbidity = 100 - ((voltage / 5.0) * 100)
-    return max(0, min(100, turbidity))
+    turbidity = -1120.4 * voltage * voltage + 5742.3 * voltage - 4353.8
+    return max(0.0, ntu)
 
 def read_sensors():
     ph_voltage = ph_sensor.voltage
