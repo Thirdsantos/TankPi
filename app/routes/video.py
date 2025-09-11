@@ -56,6 +56,8 @@ async def video_feed():
 
     if not camera_switch:
         return JSONResponse({"Message": "Camera Closed"})
+    
+
 
     return StreamingResponse(
         generate_frames(),
@@ -70,7 +72,9 @@ def set_camera_switch(switch: bool):
 
     if not switch:   # turn OFF
         cap.release()
+        print("Camera off")
     else:            # turn ON again
         cap.open(0)
+        print("Camera on")
 
     return {"Message": f"Succesfully set the switch {switch}"}

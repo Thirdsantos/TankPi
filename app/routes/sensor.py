@@ -1,3 +1,4 @@
+'''
 # sensor.py
 import board
 import busio
@@ -31,3 +32,4 @@ def read_sensors():
         "turbidity": int(voltage_to_turbidity(turbidity_voltage))
     }
 
+'''
