@@ -1,6 +1,6 @@
 import cv2
 
-camera = cv2.VideoCapture(0)
+camera = cv2.VideoCapture("/dev/mycamera")
 
 def generate_frames():
     while True:
