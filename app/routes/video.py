@@ -1,22 +1,22 @@
 import cv2
 import asyncio
-import time
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from run import aquarium  # your aquarium variable
+from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse, JSONResponse
+from run import aquarium
+import os
+from dotenv import load_dotenv
+from app.routes import verify_key
+
+load_dotenv()
+
+header = os.getenv("secret_api")
 
 video_route = APIRouter()
+cap = cv2.VideoCapture("/dev/mycamera")
 
-# ------------------------
-# Camera Setup
-# ------------------------
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-
-# Camera settings
-TARGET_WIDTH = 320
-TARGET_HEIGHT = 240
-FPS = 15
+TARGET_WIDTH = 640
+TARGET_HEIGHT = 480
+FPS = 30
 JPEG_QUALITY = 30
 
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, TARGET_WIDTH)
@@ -24,94 +24,60 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, TARGET_HEIGHT)
 cap.set(cv2.CAP_PROP_FPS, FPS)
 
 if not cap.isOpened():
-    print("Error: Cannot open camera")
+    raise RuntimeError("Cannot open camera")
 
-on_off = True
-latest_frame = None  # async frame buffer
+camera_switch = True  # keep camera on by default
 
+async def generate_frames():
+    global camera_switch, cap
 
-# ------------------------
-# Background Camera Capture Task
-# ------------------------
-async def capture_frames():
-    global latest_frame
-    while True:
-        if on_off:
-            ret, frame = cap.read()
-            if ret:
-                _, buffer = cv2.imencode(
-                    ".jpg",
-                    frame,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
-                )
-                latest_frame = buffer.tobytes()
+    while camera_switch:
+        ret, frame = cap.read()
+        if not ret:
+            await asyncio.sleep(0.1)
+            continue
 
-        await asyncio.sleep(1 / FPS)
+        frame = cv2.resize(frame, (TARGET_WIDTH, TARGET_HEIGHT))
+        ret, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+        if not ret:
+            continue
 
+        yield (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
+        )
 
-# Start background capture task
-asyncio.create_task(capture_frames())
+        await asyncio.sleep(0)  # keep original behavior
 
+@video_route.get(f"/aquarium/{aquarium}/video_feed")
+# @video_route.get(f"/aquarium/{aquarium}/video_feed", dependencies=[Depends(verify_key)])
+async def video_feed():
+    global camera_switch
 
-# ------------------------
-# Camera REST Switch
-# ------------------------
-class SwitchRequest(BaseModel):
-    switch: bool
+    if not camera_switch:
+        return JSONResponse({"Message": "Camera Closed"})
 
-
-@video_route.get("/")
-def greetings():
-    return "Hello World"
-
-
-@video_route.post(f"/aquarium/{aquarium}/camera_switch")
-def camera_switch(data: SwitchRequest):
-    global on_off
-    on_off = data.switch
-    return {"camera_on": on_off}
-
-
-# ------------------------
-# MJPEG Stream (Low Latency)
-# ------------------------
-def mjpeg_stream():
-    while True:
-        if latest_frame:
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n" + latest_frame + b"\r\n"
-            )
-        time.sleep(1 / FPS)
-
-
-@video_route.get(f"/aquarium/{aquarium}/camera/mjpeg")
-def mjpeg():
     return StreamingResponse(
-        mjpeg_stream(),
+        generate_frames(),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
+@video_route.post("/aquarium/{aquarium}/camera_switch/{switch}")
+def set_camera_switch(switch: bool):
+    global camera_switch, cap
+    camera_switch = switch
 
-# ------------------------
-# Camera Control via WebSocket
-# ------------------------
-@video_route.websocket(f"/aquarium/{aquarium}/camera/control")
-async def camera_control(websocket: WebSocket):
-    global on_off
-    await websocket.accept()
+    if not switch:   # turn OFF
+        if cap and cap.isOpened():
+            cap.release()
+    else:            # turn ON again
+        if not cap or not cap.isOpened():
+            cap = cv2.VideoCapture(0)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, TARGET_WIDTH)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, TARGET_HEIGHT)
+            cap.set(cv2.CAP_PROP_FPS, FPS)
+            if not cap.isOpened():
+                camera_switch = False
+                return JSONResponse({"Message": "Cannot open camera"}, status_code=500)
 
-    try:
-        while True:
-            message = await websocket.receive_text()
-
-            if message.lower() == "on":
-                on_off = True
-                await websocket.send_text("Camera ON")
-
-            elif message.lower() == "off":
-                on_off = False
-                await websocket.send_text("Camera OFF")
-
-    except WebSocketDisconnect:
-        print("Control client disconnected")
+    return {"Message": f"Successfully set the switch {switch}"}
