@@ -1,15 +1,18 @@
-# feeder_service.py
 import datetime
 import requests
 from run import aquarium
 from .motor import trigger_motor  # relative import for motor
+from .db import init_db, save_schedules, get_schedules
+
+# Initialize local DB
+init_db()
 
 aquarium_id = aquarium
 BACKEND_URL = "https://aquacare-5cyr.onrender.com"
 
 
 def get_backend_schedule():
-    """Fetch global switch and feeding schedules from backend API."""
+    """Fetch global switch and feeding schedules from backend API, fallback to local DB."""
     url = f"{BACKEND_URL}/get_schedules/{aquarium_id}"
     try:
         response = requests.get(url, timeout=5)
@@ -19,13 +22,18 @@ def get_backend_schedule():
             print("[DEBUG] Backend parsed JSON:", data)
             global_enabled = data.get("enabled", True)
             schedules = data.get("schedules", [])
+            # ✅ Save schedules to local DB for offline use
+            save_schedules(schedules)
             return global_enabled, schedules
         else:
             print(f"[SCHEDULE] Failed to fetch, status={response.status_code}")
-            return False, []
     except requests.RequestException as e:
         print(f"[SCHEDULE] Error: {e}")
-        return False, []
+
+    # ⬇️ If backend is unreachable, use local DB schedules
+    print("[SCHEDULE] Using local database schedules")
+    schedules = get_schedules()
+    return True, schedules
 
 
 def get_current_time():
@@ -65,21 +73,11 @@ def trigger_feeder(source: str, time_str: str, cycle: int = None, food: str = No
 
 
 def handle_feeder_request(force_trigger: bool = False):
-    """Handle a feeder request based on current time and backend schedules."""
+    """Handle a feeder request based on current time and backend/local schedules."""
     current_time = get_current_time()
-    try:
-        response = requests.get(f"{BACKEND_URL}/get_schedules/{aquarium_id}", timeout=5)
-        print("[DEBUG] Backend raw response:", response.text)
-        data = response.json()
-        print("[DEBUG] Backend parsed JSON:", data)
-    except requests.RequestException as e:
-        print(f"[FEEDER] Failed to fetch schedules: {e}")
-        return {"status": "error", "message": "Failed to fetch schedules."}
+    global_enabled, schedules = get_backend_schedule()
 
-    automatic = data.get("automatic", True)
-    schedules = data.get("schedules", [])
-
-    if not automatic and not force_trigger:
+    if not global_enabled and not force_trigger:
         return {
             "status": "off",
             "mode": "schedule",
