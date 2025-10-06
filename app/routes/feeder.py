@@ -1,25 +1,15 @@
-from fastapi import APIRouter, WebSocket
-from run import aquarium
-from starlette.websockets import WebSocketDisconnect
+from fastapi import APIRouter, Query
+from app.services.feeder_service import handle_feeder_request
+from threading import Lock
 
-feeder_route = APIRouter()
+feeder_route = APIRouter(prefix="/feeder", tags=["Feeder"])
+_feeder_lock = Lock()
 
-@feeder_route.websocket("/aquarium/{aquarium}/feeder_switch")
-async def feeder(websocket: WebSocket):
-  await websocket.accept()
-  try: 
-    while True:
-      data = await websocket.receive_json()
-      switch = data["status"]
-
-      if switch:
-        print("Auto feeder is on")
-      else:
-        print("Auto feeder is off")
-      
-  
-  except WebSocketDisconnect:
-    print("Client Disconnected")
-
-
-
+@feeder_route.get("/")
+def feeder(mode: str = Query("manual", enum=["manual", "schedule"])):
+    if not _feeder_lock.acquire(blocking=False):
+        return {"status": "busy", "message": "Feeder is already running. Please wait."}
+    try:
+        return handle_feeder_request(mode)
+    finally:
+        _feeder_lock.release()
