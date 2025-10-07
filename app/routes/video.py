@@ -2,17 +2,13 @@ import cv2
 import asyncio
 import threading
 import time
-from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from run import aquarium
 import os
 from dotenv import load_dotenv
-from app.routes import verify_key
-import subprocess  # <-- added for ffmpeg-based manager
 
 load_dotenv()
-
-header = os.getenv("secret_api")
 
 video_route = APIRouter()
 
@@ -22,6 +18,9 @@ FPS = 15
 JPEG_QUALITY = 20
 
 
+# ---------------------------
+# Camera Manager
+# ---------------------------
 class CameraManager:
     def __init__(self):
         self.cap = None
@@ -74,95 +73,79 @@ class CameraManager:
             return buffer.tobytes()
 
 
-# ---------------------------
-# New FFmpeg-based manager
-# ---------------------------
-class FFmpegCameraManager:
-    def __init__(self):
-        self.proc = None
-        self.running = False
-        self.frame = None
-        self.lock = threading.Lock()
-        self.thread = None
-
-    def start(self):
-        if self.running:
-            return
-
-        self.proc = subprocess.Popen([
-            "ffmpeg",
-            "-f", "v4l2",
-            "-framerate", str(FPS),
-            "-video_size", f"{TARGET_WIDTH}x{TARGET_HEIGHT}",
-            "-i", "/dev/video0",
-            "-vf", f"fps={FPS},scale={TARGET_WIDTH}:{TARGET_HEIGHT}",
-            "-q:v", str(31 - int(JPEG_QUALITY / 3)),  # approximate mapping
-            "-f", "mjpeg", "-"  # MJPEG stream to stdout
-        ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10**7)
-
-        self.running = True
-        self.thread = threading.Thread(target=self._update_frames, daemon=True)
-        self.thread.start()
-
-    def _update_frames(self):
-        buffer = b""
-        while self.running and self.proc and self.proc.stdout:
-            data = self.proc.stdout.read(4096)
-            if not data:
-                time.sleep(0.1)
-                continue
-            buffer += data
-            start = buffer.find(b"\xff\xd8")
-            end = buffer.find(b"\xff\xd9")
-            if start != -1 and end != -1 and end > start:
-                frame = buffer[start:end+2]
-                buffer = buffer[end+2:]
-                with self.lock:
-                    self.frame = frame
-
-    def stop(self):
-        self.running = False
-        if self.proc:
-            self.proc.kill()
-        self.proc = None
-        self.frame = None
-
-    def get_frame(self):
-        with self.lock:
-            return self.frame
-
-
-# Switch between OpenCV or FFmpeg camera manager here
 camera_manager = CameraManager()
-# camera_manager = FFmpegCameraManager()  # uncomment to use ffmpeg instead
 
 
+# ---------------------------
+# MJPEG generator
+# ---------------------------
 async def generate_frames():
     while True:
         if not camera_manager.running:
             await asyncio.sleep(0.1)
             continue
-
         frame = camera_manager.get_frame()
         if frame:
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
             )
-        await asyncio.sleep(0)
+        await asyncio.sleep(1 / FPS)
 
 
-@video_route.get(f"/aquarium/{aquarium}/video_feed")
-# @video_route.get(f"/aquarium/{aquarium}/video_feed", dependencies=[Depends(verify_key)])
-async def video_feed():
+# ---------------------------
+# MJPEG HTTP Endpoint (fallback)
+# ---------------------------
+@video_route.get("/aquarium/{aquarium}/video_feed")
+async def video_feed(aquarium: str, request: Request):
+    """
+    Serve MJPEG stream over HTTP.
+    Fallback for browsers that don't support WebSocket.
+    """
+    if not camera_manager.running:
+        camera_manager.start()
     return StreamingResponse(
         generate_frames(),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
 
-@video_route.post(f"/aquarium/{aquarium}/camera_switch/{{switch}}")
-def set_camera_switch(switch: bool):
+# ---------------------------
+# WebSocket Streaming Endpoint
+# ---------------------------
+@video_route.websocket("/aquarium/{aquarium}/video_feed_ws")
+async def websocket_video(websocket: WebSocket, aquarium: str):
+    """
+    Fast WebSocket streaming as binary JPEG frames.
+    Connect via: ws:// or wss://
+    """
+    await websocket.accept()
+    print(f"✅ WebSocket client connected to aquarium {aquarium}")
+
+    if not camera_manager.running:
+        camera_manager.start()
+
+    try:
+        while True:
+            frame = camera_manager.get_frame()
+            if frame:
+                try:
+                    await asyncio.wait_for(websocket.send_bytes(frame), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+            await asyncio.sleep(1 / FPS)
+
+    except WebSocketDisconnect:
+        print(f"👋 Client disconnected from aquarium {aquarium}")
+    finally:
+        camera_manager.stop()
+
+
+# ---------------------------
+# Camera On/Off Endpoint
+# ---------------------------
+@video_route.post("/aquarium/{aquarium}/camera_switch/{switch}")
+def set_camera_switch(aquarium: str, switch: bool):
     try:
         if switch:
             camera_manager.start()
