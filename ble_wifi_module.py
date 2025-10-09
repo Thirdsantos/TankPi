@@ -7,38 +7,73 @@ import os
 import subprocess
 import time
 from gi.repository import GLib
+import shutil
 import sys
 
-# ---------- UUIDs ----------
 SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
 CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
 CHAR_USER_DESC_UUID = "2901"
-
 WPA_SUPPLICANT_FILE = "/etc/wpa_supplicant/wpa_supplicant.conf"
+
+# ---------- Helper ----------
+def has_nmcli():
+    return shutil.which("nmcli") is not None
 
 # ---------- WiFi Handling ----------
 def connect_to_wifi(ssid, password):
-    try:
-        config = f"""
+    if has_nmcli():
+        print(f"[WiFi] NetworkManager detected. Using nmcli for SSID '{ssid}'...")
+        try:
+            subprocess.run(["sudo", "nmcli", "radio", "wifi", "on"], check=False)
+            subprocess.run(["sudo", "nmcli", "dev", "disconnect", "wlan0"], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "nmcli", "con", "down", ssid], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "nmcli", "con", "delete", ssid], stderr=subprocess.DEVNULL)
+            subprocess.run(["sudo", "nmcli", "dev", "wifi", "connect", ssid, "password", password], check=True)
+            ip = subprocess.check_output("hostname -I", shell=True).decode().strip()
+            print(f"[WiFi] Connected via nmcli. IPs: {ip if ip else '(none)'}")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"[WiFi] nmcli failed: {e}")
+            return False
+    else:
+        # Manual fallback
+        print("[WiFi] NetworkManager not found, using wpa_supplicant method...")
+        try:
+            if os.path.exists(WPA_SUPPLICANT_FILE):
+                os.remove(WPA_SUPPLICANT_FILE)
+
+            config = f"""
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
-country=US
+country=PH
 
 network={{
     ssid="{ssid}"
     psk="{password}"
 }}
 """
-        with open(WPA_SUPPLICANT_FILE, "w") as f:
-            f.write(config)
-        print(f"[WiFi] Updated config for SSID: {ssid}")
-        subprocess.run(["sudo", "wpa_cli", "-i", "wlan0", "reconfigure"], check=True)
-        ip = subprocess.check_output("hostname -I", shell=True).decode().strip()
-        print(f"[WiFi] Connected. IPs: {ip}")
-    except Exception as e:
-        print(f"[WiFi] Failed to connect: {e}")
+            with open(WPA_SUPPLICANT_FILE, "w") as f:
+                f.write(config.strip() + "\n")
 
-# ---------- BLE GATT Classes ----------
+            print(f"[WiFi] Wrote config for SSID: {ssid}")
+            subprocess.run(["sudo", "pkill", "-f", "wpa_supplicant"], stderr=subprocess.DEVNULL)
+            time.sleep(1)
+            subprocess.run(["sudo", "wpa_supplicant", "-B", "-i", "wlan0", "-c", WPA_SUPPLICANT_FILE], check=True)
+            print("[WiFi] wpa_supplicant restarted")
+            subprocess.run(["sudo", "dhclient", "-r", "wlan0"], stderr=subprocess.DEVNULL)
+            time.sleep(1)
+            subprocess.run(["sudo", "dhclient", "wlan0"], check=True)
+            ip = subprocess.check_output("hostname -I", shell=True).decode().strip()
+            print(f"[WiFi] Connected successfully. IPs: {ip if ip else '(none)'}")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"[WiFi] Command failed: {e}")
+            return False
+        except Exception as e:
+            print(f"[WiFi] Exception: {e}")
+            return False
+
+# ---------- BLE GATT ----------
 BLUEZ_SERVICE_NAME = 'org.bluez'
 GATT_CHRC_IFACE = 'org.bluez.GattCharacteristic1'
 GATT_SERVICE_IFACE = 'org.bluez.GattService1'
@@ -52,8 +87,7 @@ class WiFiCharacteristic(dbus.service.Object):
         self.flags = flags
         self.service = service
         dbus.service.Object.__init__(self, bus, self.path)
-        self.descriptor_path = self.path + "/desc0"
-        self.descriptor = WiFiDescriptor(bus, 0, CHAR_USER_DESC_UUID, ["read"], self, "Wi-Fi Credential Write")
+        self.descriptor = WiFiDescriptor(bus, 0, CHAR_USER_DESC_UUID, ["read"], self, "Wi-Fi Credentials")
 
     def get_path(self):
         return dbus.ObjectPath(self.path)
@@ -66,7 +100,8 @@ class WiFiCharacteristic(dbus.service.Object):
             ssid = creds.get("ssid")
             password = creds.get("password")
             print(f"[BLE] Received WiFi creds: {ssid}/{password}")
-            connect_to_wifi(ssid, password)
+            success = connect_to_wifi(ssid, password)
+            print("[BLE] WiFi connection " + ("successful ✅" if success else "failed ❌"))
         except Exception as e:
             print(f"[BLE] WriteValue error: {e}")
 
@@ -94,6 +129,7 @@ class WiFiDescriptor(dbus.service.Object):
     def ReadValue(self):
         return dbus.Array(bytearray(self.value, 'utf-8'), signature='y')
 
+
 class WiFiService(dbus.service.Object):
     def __init__(self, bus, index):
         self.path = f"/org/bluez/example/service{index}"
@@ -112,7 +148,6 @@ class WiFiService(dbus.service.Object):
 
 class Application(dbus.service.Object):
     PATH_BASE = '/org/bluez/example/application'
-
     def __init__(self, bus):
         self.path = self.PATH_BASE
         self.bus = bus
@@ -138,7 +173,6 @@ class Application(dbus.service.Object):
 
 class BLEAdvertisement(dbus.service.Object):
     PATH_BASE = "/org/bluez/example/advertisement"
-
     def __init__(self, bus, index, adv_type):
         self.path = self.PATH_BASE + str(index)
         self.bus = bus
@@ -147,74 +181,135 @@ class BLEAdvertisement(dbus.service.Object):
         dbus.service.Object.__init__(self, bus, self.path)
 
     def get_properties(self):
-        return {"org.bluez.LEAdvertisement1": {"Type": self.ad_type, "ServiceUUIDs": dbus.Array(self.service_uuids, signature='s'), "LocalName": "TankPi-1234", "IncludeTxPower": True}}
+        return {
+            "org.bluez.LEAdvertisement1": {
+                "Type": self.ad_type,
+                "ServiceUUIDs": dbus.Array(self.service_uuids, signature='s'),
+                "LocalName": "TankPi",
+                "IncludeTxPower": True
+            }
+        }
 
     def get_path(self):
         return dbus.ObjectPath(self.path)
 
     @dbus.service.method("org.freedesktop.DBus.Properties", in_signature="s", out_signature="a{sv}")
     def GetAll(self, interface):
-        if interface != "org.bluez.LEAdvertisement1":
-            raise dbus.exceptions.DBusException("Invalid interface")
         return self.get_properties()["org.bluez.LEAdvertisement1"]
 
     @dbus.service.method("org.bluez.LEAdvertisement1", in_signature="", out_signature="")
     def Release(self):
         print("[BLE] Advertisement released")
 
-def register_advertisement(adapter, advertisement, retries=3):
-    for i in range(retries):
-        try:
-            adapter.RegisterAdvertisement(advertisement.get_path(), {},
-                                          reply_handler=lambda: print("[BLE] Advertisement registered"),
-                                          error_handler=lambda e: print(f"[BLE] Failed to register: {e}"))
-            return
-        except Exception as e:
-            print(f"[BLE] Retry {i+1} failed: {e}")
-            time.sleep(1)
-    print("[BLE] Could not register advertisement after retries")
-    sys.exit(1)
+def cleanup():
+    print("[EXIT] Cleaning up BLE/WiFi processes...")
+    subprocess.call(['sudo', 'pkill', '-f', 'wpa_supplicant'])
+    subprocess.call(['sudo', 'hciconfig', 'hci0', 'down'])
+    subprocess.call(['sudo', 'systemctl', 'restart', 'bluetooth'])
+    subprocess.call(['sudo', 'rfkill', 'unblock', 'all'])
+    print("[EXIT] Cleanup complete.")
 
 def main():
     print("[DEBUG] Starting BLE main()")
+
+    # --- Clean up from any previous runs ---
+    subprocess.call(['sudo', 'pkill', '-f', 'wpa_supplicant'])
+    subprocess.call(['sudo', 'pkill', '-f', 'bluetoothd'])
+    subprocess.call(['sudo', 'systemctl', 'start', 'bluetooth'])
+    subprocess.call(['sudo', 'rfkill', 'unblock', 'all'])
+    time.sleep(1)
+
+    # --- Reset Bluetooth adapter cleanly ---
+    print("[DEBUG] Resetting Bluetooth adapter (hci0)...")
+    for i in range(3):  # up to 3 retries
+        try:
+            subprocess.call(["sudo", "hciconfig", "hci0", "down"], stderr=subprocess.DEVNULL)
+            subprocess.call(["sudo", "hciconfig", "hci0", "reset"], stderr=subprocess.DEVNULL)
+            subprocess.call(["sudo", "hciconfig", "hci0", "up"], stderr=subprocess.DEVNULL)
+            time.sleep(1)
+            # quick check to confirm it's up
+            output = subprocess.check_output(["hciconfig", "hci0"], text=True)
+            if "UP RUNNING" in output:
+                print("[DEBUG] hci0 is up and running ✅")
+                break
+            else:
+                print(f"[WARN] hci0 not ready (attempt {i+1})")
+        except subprocess.CalledProcessError:
+            print(f"[ERROR] hciconfig failed (attempt {i+1})")
+        time.sleep(2)
+    else:
+        print("[FATAL] Could not initialize hci0 after retries.")
+        sys.exit(1)
+
+    # --- BLE setup ---
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
-
-    # Bring up adapter
-    subprocess.call(['sudo', 'rfkill', 'unblock', 'bluetooth'])
-    subprocess.call(['sudo', 'hciconfig', 'hci0', 'up'])
-
-    # Register GATT app
     app = Application(bus)
 
     try:
-        gatt_manager = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, "/org/bluez/hci0"), "org.bluez.GattManager1")
+        gatt_manager = dbus.Interface(
+            bus.get_object(BLUEZ_SERVICE_NAME, "/org/bluez/hci0"),
+            "org.bluez.GattManager1"
+        )
     except Exception as e:
         print(f"[ERROR] Could not get GattManager1: {e}")
+        cleanup()
         sys.exit(1)
 
     def gatt_registered():
         print("[DEBUG] GATT service registered")
         try:
-            adapter = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, "/org/bluez/hci0"), "org.bluez.LEAdvertisingManager1")
+            adapter = dbus.Interface(
+                bus.get_object(BLUEZ_SERVICE_NAME, "/org/bluez/hci0"),
+                "org.bluez.LEAdvertisingManager1"
+            )
             advertisement = BLEAdvertisement(bus, 0, "peripheral")
-            register_advertisement(adapter, advertisement)
+
+            def adv_error(e):
+                print(f"[BLE] Advertisement registration failed: {e}")
+                print("[DEBUG] Retrying BLE advertisement...")
+                for j in range(3):
+                    time.sleep(2)
+                    try:
+                        adapter.RegisterAdvertisement(
+                            advertisement.get_path(), {},
+                            reply_handler=lambda: print("[BLE] Advertisement registered ✅"),
+                            error_handler=lambda e: print(f"[BLE] Retry {j+1} failed: {e}")
+                        )
+                        return
+                    except Exception as ex:
+                        print(f"[BLE] Retry {j+1} exception: {ex}")
+                print("[FATAL] Could not register BLE advertisement after retries.")
+                sys.exit(1)
+
+            adapter.RegisterAdvertisement(
+                advertisement.get_path(), {},
+                reply_handler=lambda: print("[BLE] Advertisement registered ✅"),
+                error_handler=adv_error
+            )
+
         except Exception as e:
             print(f"[ERROR] Failed to start advertisement: {e}")
+            cleanup()
             sys.exit(1)
 
     try:
-        gatt_manager.RegisterApplication(app.get_path(), {}, reply_handler=gatt_registered,
-                                         error_handler=lambda e: print(f"[ERROR] Failed to register GATT: {e}"))
+        gatt_manager.RegisterApplication(
+            app.get_path(), {},
+            reply_handler=gatt_registered,
+            error_handler=lambda e: print(f"[ERROR] Failed to register GATT: {e}")
+        )
     except Exception as e:
         print(f"[ERROR] RegisterApplication exception: {e}")
+        cleanup()
         sys.exit(1)
 
     print("[BLE] WiFi provisioning service running...")
     try:
         GLib.MainLoop().run()
     except KeyboardInterrupt:
-        print("[EXIT] KeyboardInterrupt")
+        cleanup()
+
 
 if __name__ == "__main__":
     main()
