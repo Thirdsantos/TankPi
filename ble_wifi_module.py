@@ -138,7 +138,8 @@ class WiFiService(dbus.service.Object):
         self.primary = True
         self.characteristics = []
         dbus.service.Object.__init__(self, bus, self.path)
-        self.add_characteristic(WiFiCharacteristic(bus, 0, CHAR_UUID, ["write"], self))
+        self.add_characteristic(WiFiCharacteristic(bus, 0, CHAR_UUID, ["write-without-response"], self))
+
 
     def add_characteristic(self, chrc):
         self.characteristics.append(chrc)
