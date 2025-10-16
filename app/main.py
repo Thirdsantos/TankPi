@@ -55,6 +55,9 @@ print("DEBUG: root endpoint added")
 scheduler = BackgroundScheduler()
 print("DEBUG: scheduler created")
 
+
+
+
 @app.on_event("startup")
 def on_startup():
     print("DEBUG: startup event running")
