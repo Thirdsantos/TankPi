@@ -1,31 +1,28 @@
 from run import aquarium
 import pytz
 import requests
-import datetime 
-
-
-aquarium_id = aquarium
-
-print("DEBUG: starting main.py")
+import datetime
+import threading  # ✅ NEW — added for background notification threads
 
 from fastapi import FastAPI
-print("DEBUG: imported FastAPI")
-
 from fastapi.middleware.cors import CORSMiddleware
-print("DEBUG: imported CORSMiddleware")
-
 from apscheduler.schedulers.background import BackgroundScheduler
-print("DEBUG: imported APScheduler")
+
+# ✅ New imports for feeding + notify
+from app.services.motor import trigger_motor  # ✅ NEW — to run the motor for each job
+from app.services.notify_service import notify_task_complete  # ✅ NEW — to notify backend
 
 # Import your routes AFTER FastAPI setup
 from app.routes import video, feeder, manual_feed, once_schedule
-print("DEBUG: imported routes")
-
 from app.services.feeder_service import check_and_trigger_schedule
-print("DEBUG: imported feeder_service")
-
 from app.routes.sensors import send_sensor_realtime, send_sensor_hourly
-print("DEBUG: imported sensors")
+
+# ------------------------------------------------------
+# Initialization
+# ------------------------------------------------------
+aquarium_id = aquarium
+
+print("DEBUG: starting main.py")
 
 # ✅ Create FastAPI app
 app = FastAPI()
@@ -42,16 +39,10 @@ print("DEBUG: middleware added")
 
 # ✅ Include routers — only after app is defined
 app.include_router(video.video_route)
-print("DEBUG: video router included")
-
 app.include_router(manual_feed.feed_route)
-print("DEBUG: manual_feed router included")
-
 app.include_router(feeder.feeder_route)
-print("DEBUG: feeder router included")
-
 app.include_router(once_schedule.once_route)
-print("DEBUG: once_schedule router included")
+print("DEBUG: all routers included")
 
 # ✅ Root endpoint
 @app.get("/")
@@ -60,9 +51,14 @@ def root():
 print("DEBUG: root endpoint added")
 
 # ✅ Scheduler setup
-scheduler = BackgroundScheduler()
+from app.scheduler_instance import scheduler
+
 print("DEBUG: scheduler created")
 
+
+# ------------------------------------------------------
+# Auto-Rescheduler Logic
+# ------------------------------------------------------
 def auto_reschedule_all(aquarium_id: int):
     """
     Fetches all pending schedules from the backend and re-adds them to APScheduler.
@@ -110,18 +106,28 @@ def auto_reschedule_all(aquarium_id: int):
                 print(f"[AUTO-RESCHEDULER] ⏩ Skipping duplicate job '{job_id}' (already scheduled)")
                 continue
 
-            # Define feeding job
+            # ✅ Define feeding job with notify support
             def execute_feeding(job_id=job_id, food_type=food_type, cycle=cycle):
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print(f"[AUTO-RESCHEDULER JOB] Executing job {job_id} at {now}")
-                trigger_motor(food_type, now, cycle)
-                print(f"[AUTO-RESCHEDULER JOB] ✅ Motor triggered ({cycle}x {food_type})")
+                print(f"[AUTO-RESCHEDULER JOB] 🚀 Executing job {job_id} at {now}")
 
-            # ✅ Schedule job with document_id as the job ID
+                try:
+                    # Trigger the feeding motor
+                    trigger_motor(food_type, now, cycle)
+                    print(f"[AUTO-RESCHEDULER JOB] ✅ Motor triggered ({cycle}x {food_type})")
+
+                    # ✅ Notify backend asynchronously
+                    threading.Thread(target=notify_task_complete, args=(job_id,)).start()
+                    print(f"[AUTO-RESCHEDULER JOB] 📢 Notification dispatched for job_id={job_id}")
+
+                except Exception as e:
+                    print(f"[AUTO-RESCHEDULER JOB ERROR] ❌ Failed to execute feeding for {job_id}: {e}")
+
+            # ✅ Schedule job with document_id as job ID
             scheduler.add_job(
-                execute_feeding, #RAND!!! itong execute_feeding is dummy lang, 
-                trigger="date", #hindi ko alam kung ano yung function na dapat tawagin kapag ka mag rurun na yung schedule
-                run_date=utc_dt, #Ikaw mag lagay tapos tanggalin mo yang execute_feeding
+                execute_feeding,
+                trigger="date",
+                run_date=utc_dt,
                 id=job_id,
                 replace_existing=True
             )
@@ -139,6 +145,9 @@ def auto_reschedule_all(aquarium_id: int):
         return {"status": "error", "message": str(e)}
 
 
+# ------------------------------------------------------
+# Startup & Shutdown Events
+# ------------------------------------------------------
 @app.on_event("startup")
 def on_startup():
     print("DEBUG: startup event running")
@@ -149,12 +158,12 @@ def on_startup():
     print("DEBUG: scheduler started")
 
     try:
-
         print(f"[STARTUP] Auto-rescheduling all tasks for aquarium {aquarium_id}...")
         result = auto_reschedule_all(aquarium_id)
         print(f"[STARTUP] Auto-rescheduler result: {result}")
     except Exception as e:
         print(f"[STARTUP ERROR] Failed to auto-reschedule: {e}")
+
 
 @app.on_event("shutdown")
 def on_shutdown():
