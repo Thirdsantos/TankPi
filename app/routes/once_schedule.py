@@ -4,9 +4,9 @@ import threading
 from fastapi import APIRouter, Request
 from run import aquarium
 from app.services.motor import trigger_motor
-from app.services.notify_service import notify_task_complete  
+from app.services.notify_service import notify_task_complete
 from app.scheduler_instance import scheduler
-
+import requests
 
 # Create router instance
 once_route = APIRouter()
@@ -71,14 +71,22 @@ async def add_one_time_task(request: Request):
             print(f"[ONCE-SCHEDULE JOB] 🚀 Executing job {job_id} at {now}")
 
             try:
-                # Trigger the physical motor
+                # ✅ Trigger the physical motor
                 trigger_motor(food_type, now, cycle)
                 print(f"[ONCE-SCHEDULE JOB] ✅ Motor triggered ({cycle}x {food_type})")
 
-                # ✅ Notify backend asynchronously (so scheduler doesn’t block)
-                threading.Thread(target=notify_task_complete, args=(job_id,)).start()
-                print(f"[ONCE-SCHEDULE JOB] 📢 Notification dispatched for job_id={job_id}")
+                # ✅ Notify backend immediately when done
+                url = f"https://aquacare-5cyr.onrender.com/task_complete/{job_id}"
+                print(f"[ONCE-SCHEDULE JOB] 📢 Sending POST request to: {url}")
 
+                response = requests.post(url, timeout=10)
+                response.raise_for_status()
+
+                print(f"[ONCE-SCHEDULE JOB] ✅ Successfully marked task {job_id} as complete.")
+                return {"status": "success", "message": f"Task {job_id} marked complete."}
+
+            except requests.exceptions.RequestException as e:
+                print(f"[ONCE-SCHEDULE JOB ERROR] ❌ Failed to notify backend: {e}")
             except Exception as e:
                 print(f"[ONCE-SCHEDULE JOB ERROR] ❌ Failed to execute feeding for {job_id}: {e}")
 
