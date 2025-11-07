@@ -4,6 +4,8 @@ import adafruit_ads1x15.ads1115 as ADS
 from adafruit_ads1x15.analog_in import AnalogIn
 from w1thermsensor import W1ThermSensor
 from RPLCD.i2c import CharLCD
+import socket
+from datetime import datetime
 
 # I2C and ADS1115 setup
 i2c = busio.I2C(board.SCL, board.SDA)
@@ -16,6 +18,14 @@ calibration_value = 21.34 - 0.7
 
 # LCD setup
 lcd = CharLCD('PCF8574', 0x27, cols=20, rows=4)
+
+def check_wifi():
+    """Check if the device has internet connectivity."""
+    try:
+        socket.create_connection(("8.8.8.8", 53), timeout=2)
+        return "Connected"
+    except OSError:
+        return "Disconnected"
 
 def voltage_to_ph(ph_voltage):
     ph_value = -5.70 * ph_voltage + calibration_value
@@ -38,22 +48,31 @@ def read_sensors(update_lcd: bool = True):
 
     data = {
         "ph": voltage_to_ph(ph_voltage),
+        "ph_raw": round(ph_voltage, 3),
         "temperature": int(temperature_c),
-        "turbidity": int(voltage_to_turbidity(turbidity_voltage))
+        "turbidity": int(voltage_to_turbidity(turbidity_voltage)),
+        "turb_raw": round(turbidity_voltage, 3)
     }
 
     if update_lcd:
-        # Update LCD
+        lcd.clear()
+
+        # Line 1: pH and raw voltage
         lcd.cursor_pos = (0, 0)
-        lcd.write_string(f"pH: {data['ph']:<6}")
+        lcd.write_string(f"pH:{data['ph']} ({data['ph_raw']:.2f}V)")
 
+        # Line 2: Temperature
         lcd.cursor_pos = (1, 0)
-        lcd.write_string(f"Temp: {data['temperature']}C   ")
+        lcd.write_string(f"Temp:{data['temperature']}C   ")
 
+        # Line 3: Turbidity and raw voltage
         lcd.cursor_pos = (2, 0)
-        lcd.write_string(f"Turb: {data['turbidity']}  ")
+        lcd.write_string(f"Turb:{data['turbidity']} ({data['turb_raw']:.2f}V)")
 
+        # Line 4: WiFi + time
+        wifi_status = check_wifi()
+        current_time = datetime.now().strftime(" %H:%M")
         lcd.cursor_pos = (3, 0)
-        lcd.write_string("Monitoring...     ")
+        lcd.write_string(f"{wifi_status:<10}{current_time}")
 
     return data
