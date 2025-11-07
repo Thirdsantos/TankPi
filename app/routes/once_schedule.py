@@ -1,9 +1,12 @@
 import datetime
 import pytz
+import threading
 from fastapi import APIRouter, Request
 from run import aquarium
-from app.services.motor import trigger_motor  
-from app.main import scheduler
+from app.services.motor import trigger_motor
+from app.services.notify_service import notify_task_complete  
+from app.scheduler_instance import scheduler
+
 
 # Create router instance
 once_route = APIRouter()
@@ -62,16 +65,26 @@ async def add_one_time_task(request: Request):
             print("[ONCE-SCHEDULE] ❌ Invalid datetime format or timezone:", e)
             return {"status": "error", "message": "Invalid datetime or timezone"}
 
-        # RAND!! Gumawa muna ako ng Sample shit since hindi  ko alam kung ano yung dapat nag tritrigger na fucntion ikaw nalang mag lagay
+        # ✅ Actual scheduled function
         def execute_feeding():
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"[ONCE-SCHEDULE JOB] Executing job {job_id} at {now}")
-            trigger_motor(food_type, now, cycle)
-            print(f"[ONCE-SCHEDULE JOB] ✅ Motor triggered for {cycle} cycles of {food_type}")
+            print(f"[ONCE-SCHEDULE JOB] 🚀 Executing job {job_id} at {now}")
+
+            try:
+                # Trigger the physical motor
+                trigger_motor(food_type, now, cycle)
+                print(f"[ONCE-SCHEDULE JOB] ✅ Motor triggered ({cycle}x {food_type})")
+
+                # ✅ Notify backend asynchronously (so scheduler doesn’t block)
+                threading.Thread(target=notify_task_complete, args=(job_id,)).start()
+                print(f"[ONCE-SCHEDULE JOB] 📢 Notification dispatched for job_id={job_id}")
+
+            except Exception as e:
+                print(f"[ONCE-SCHEDULE JOB ERROR] ❌ Failed to execute feeding for {job_id}: {e}")
 
         # ✅ Add job to scheduler
         scheduler.add_job(
-            execute_feeding, #Dito sa part na toh dito mo ipalit yung function na dapat mag run kapag ka nag hit na yung APScheduler
+            execute_feeding,
             trigger="date",
             run_date=utc_dt,
             id=job_id,
@@ -93,6 +106,7 @@ async def add_one_time_task(request: Request):
     except Exception as e:
         print(f"[ONCE-SCHEDULE ERROR] {e}")
         return {"status": "error", "message": str(e)}
+
 
 @once_route.delete(f"/{aquarium_id}/delete_task")
 async def delete_one_time_task(request: Request):
@@ -139,5 +153,3 @@ async def delete_one_time_task(request: Request):
     except Exception as e:
         print(f"[DELETE-SCHEDULE ERROR] {e}")
         return {"status": "error", "message": str(e)}
-
-
