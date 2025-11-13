@@ -19,17 +19,23 @@ STEP_SEQUENCE = [
 ]
 
 STEPS_PER_FULL_ROTATION = 512  # One full revolution (half-stepping)
-STEP_DELAY = 0.001              # Delay between steps (lower = faster, but less torque)
+STEP_DELAY = 0.001             # Delay between steps (lower = faster, but less torque)
 
 # -------------------- GPIO SETUP --------------------
+_initialized = False  # internal flag to ensure setup runs only once
 
 def setup_gpio():
-    """Initialize GPIO pins."""
+    """Initialize GPIO pins once."""
+    global _initialized
+    if _initialized:
+        return
     GPIO.setmode(GPIO.BCM)
     GPIO.setwarnings(False)
     for pin in [IN1, IN2, IN3, IN4]:
         GPIO.setup(pin, GPIO.OUT)
         GPIO.output(pin, 0)
+    _initialized = True
+    print("[MOTOR] GPIO initialized")
 
 def release_motor():
     """Turn off all coils."""
@@ -42,6 +48,7 @@ def cleanup_gpio():
     try:
         release_motor()
         GPIO.cleanup()
+        print("[MOTOR] GPIO cleaned up")
     except Exception:
         pass
 
@@ -66,38 +73,28 @@ def step_motor(steps=STEPS_PER_FULL_ROTATION, delay=STEP_DELAY, direction=1):
 def pellet_motor(time_str: str, cycle: int = 1):
     """Pellet feeder motor (clockwise)."""
     print(f"[MOTOR] Pellet start — {time_str}")
-
-    try:
-        for i in range(cycle):
-            print(f"[MOTOR] Pellet (CW) — cycle {i+1}/{cycle}")
-            step_motor(direction=1)
-            time.sleep(0.1)
-    finally:
-        cleanup_gpio()
-        print(f"[MOTOR] Pellet done — {time_str}")
-
+    for i in range(cycle):
+        print(f"[MOTOR] Pellet (CW) — cycle {i+1}/{cycle}")
+        step_motor(direction=1)
+        time.sleep(0.1)
+    print(f"[MOTOR] Pellet done — {time_str}")
     return {"status": "success", "motor": "pellet", "time": time_str, "cycle": cycle}
-
 
 def flakes_motor(time_str: str, cycle: int = 1):
     """Flakes feeder motor (counterclockwise)."""
     print(f"[MOTOR] Flakes start — {time_str}")
-
-    try:
-        for i in range(cycle):
-            print(f"[MOTOR] Flakes (CCW) — cycle {i+1}/{cycle}")
-            step_motor(direction=-1)
-            time.sleep(0.1)
-    finally:
-        cleanup_gpio()
-        print(f"[MOTOR] Flakes done — {time_str}")
-
+    for i in range(cycle):
+        print(f"[MOTOR] Flakes (CCW) — cycle {i+1}/{cycle}")
+        step_motor(direction=-1)
+        time.sleep(0.1)
+    print(f"[MOTOR] Flakes done — {time_str}")
     return {"status": "success", "motor": "flakes", "time": time_str, "cycle": cycle}
 
+# -------------------- MOTOR TRIGGER --------------------
 
 def trigger_motor(food: str, time_str: str, cycle: int = 1):
     """Dispatch correct motor based on food type."""
-    setup_gpio()  # Ensure GPIO is ready before motor run
+    setup_gpio()  # ensure GPIO initialized once
 
     if food.lower() == "pellet":
         return pellet_motor(time_str, cycle)
@@ -106,3 +103,4 @@ def trigger_motor(food: str, time_str: str, cycle: int = 1):
     else:
         print(f"[MOTOR] ❌ Invalid food type: {food}")
         return {"status": "error", "message": "Invalid food type"}
+
