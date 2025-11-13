@@ -1,0 +1,103 @@
+import datetime
+import requests
+from run import aquarium
+from .motor import trigger_motor  # relative import for motor
+
+aquarium_id = aquarium
+BACKEND_URL = "https://aquacare-5cyr.onrender.com"
+
+
+def get_backend_schedule():
+    """Fetch global switch and feeding schedules from backend API."""
+    url = f"{BACKEND_URL}/get_schedules/{aquarium_id}"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        global_enabled = data.get("enabled", True)
+        schedules = data.get("schedules", [])
+        print(f"[FEEDER] Backend schedules fetched: {schedules}", flush=True)
+        return global_enabled, schedules
+    except requests.RequestException as e:
+        print(f"[FEEDER ERROR] Backend fetch failed: {e}", flush=True)
+        # fallback to empty list if backend fails
+        return True, []
+
+
+def get_current_time():
+    """Get current time in HH:MM format."""
+    return datetime.datetime.now().strftime("%H:%M")
+
+
+def trigger_feeder(source: str, time_str: str, cycle: int = 1, food: str = "pellet"):
+    """Trigger the feeder motor directly."""
+    print(f"[FEEDER] Triggering {food} x{cycle} via {source} at {time_str}", flush=True)
+    motor_result = trigger_motor(food, time_str, cycle)
+    return {
+        "status": "success",
+        "mode": source,
+        "time": time_str,
+        "cycle": cycle,
+        "food": food,
+        "motor_result": motor_result,
+        "message": f"Feeder triggered via {source} at {time_str}"
+    }
+
+
+def handle_feeder_request(force_trigger: bool = False):
+    """
+    Manual trigger or automatic check at current time.
+    force_trigger=True → triggers immediately all schedules regardless of time.
+    """
+    current_time = get_current_time()
+    global_enabled, schedules = get_backend_schedule()
+
+    if not global_enabled and not force_trigger:
+        print("[FEEDER] Global switch is OFF — skipping manual/auto feed.", flush=True)
+        return {"status": "off", "message": "Automatic feeding is OFF globally."}
+
+    triggered = []
+    for s in schedules:
+        schedule_time = s.get("time")
+        schedule_switch = s.get("switch", True)
+        cycle = s.get("cycle", 1)
+        food = s.get("food", "pellet")
+
+        if force_trigger or (schedule_time == current_time and schedule_switch):
+            triggered.append(trigger_feeder("schedule", schedule_time, cycle, food))
+
+    if triggered:
+        return {"status": "success", "triggers": triggered}
+    else:
+        return {
+            "status": "pending",
+            "backend_time": current_time,
+            "message": "No scheduled feeding now."
+        }
+
+
+def check_and_trigger_schedule():
+    """
+    Automatic check for scheduled feeding. Called every minute by scheduler.
+    Triggers all schedules that match the current time.
+    """
+    current_time = get_current_time()
+    global_enabled, schedules = get_backend_schedule()
+
+    if not global_enabled:
+        print("[FEEDER] Global switch is OFF — skipping scheduled feed.", flush=True)
+        return None
+
+    triggered = []
+    for s in schedules:
+        schedule_time = s.get("time")
+        cycle = s.get("cycle", 1)
+        food = s.get("food", "pellet")
+        schedule_switch = s.get("switch", True)
+
+        if schedule_time == current_time and schedule_switch:
+            triggered.append(trigger_feeder("schedule-auto", current_time, cycle, food))
+
+    if triggered:
+        return {"status": "success", "triggers": triggered}
+    return None
