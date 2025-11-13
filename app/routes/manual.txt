@@ -1,0 +1,53 @@
+import threading
+import datetime
+from fastapi import APIRouter, Request, BackgroundTasks
+from app.services.motor import trigger_motor  # your motor control file
+
+feed_route = APIRouter()
+
+# -------------------- FEED ENDPOINTS --------------------
+
+@feed_route.post("/manual/hold_feed")
+async def manual_hold_feed(request: Request, background_tasks: BackgroundTasks):
+    """
+    Trigger manual feed immediately (runs in background, no locking).
+    """
+    try:
+        data = await request.json()
+        food = data.get("food", "").lower()
+        cycle = int(data.get("cycle", 1))
+        time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        background_tasks.add_task(trigger_motor, food, time_str, cycle)
+
+        return {
+            "status": "success",
+            "message": f"Manual feed started for {food}",
+            "time": time_str
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@feed_route.post("/manual/cycle_feed")
+async def manual_cycle_feed(request: Request, background_tasks: BackgroundTasks):
+    """
+    Trigger feed by cycle count manually (no locking).
+    """
+    try:
+        data = await request.json()
+        food = data.get("food", "").lower()
+        cycle = int(data.get("cycle", 1))
+        time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        background_tasks.add_task(trigger_motor, food, time_str, cycle)
+
+        return {
+            "status": "success",
+            "message": f"Cycle feed started for {food}, {cycle}x rotation",
+            "time": time_str
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
