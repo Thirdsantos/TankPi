@@ -61,7 +61,9 @@ def handle_feeder_request(force_trigger: bool = False):
         schedule_time = s.get("time")
         schedule_switch = s.get("switch", True)
         cycle = s.get("cycle", 1)
-        food = s.get("food", "pellet")
+        food = s.get("food", "pellet").lower()
+        if food == "pellets":
+            food = "pellet"
 
         if force_trigger or (schedule_time == current_time and schedule_switch):
             triggered.append(trigger_feeder("schedule", schedule_time, cycle, food))
@@ -92,7 +94,9 @@ def check_and_trigger_schedule():
     for s in schedules:
         schedule_time = s.get("time")
         cycle = s.get("cycle", 1)
-        food = s.get("food", "pellet")
+        food = s.get("food", "pellet").lower()
+        if food == "pellets":
+            food = "pellet"
         schedule_switch = s.get("switch", True)
 
         if schedule_time == current_time and schedule_switch:
