@@ -15,6 +15,9 @@ async def manual_hold_feed(request: Request, background_tasks: BackgroundTasks):
     try:
         data = await request.json()
         food = data.get("food", "").lower()
+        if food == "pellets":  # Normalize backend format
+            food = "pellet"
+
         cycle = int(data.get("cycle", 1))
         time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -38,6 +41,9 @@ async def manual_cycle_feed(request: Request, background_tasks: BackgroundTasks)
     try:
         data = await request.json()
         food = data.get("food", "").lower()
+        if food == "pellets":  # Normalize backend format
+            food = "pellet"
+
         cycle = int(data.get("cycle", 1))
         time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
