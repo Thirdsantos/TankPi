@@ -4,11 +4,20 @@ from pydantic import BaseModel
 from app.services.motor import trigger_motor
 import datetime
 import threading
+from run import aquarium  # <-- your configured aquarium ID
 
 feed_route = APIRouter()
 
+# Convert imported aquarium ID to string (safe for matching URL params)
+aquarium_id_from_run = str(aquarium)
+
 # Create a lock to prevent multiple simultaneous feeds
 feed_lock = threading.Lock()
+
+
+def validate_aquarium_id(aquarium_id: str):
+    """Ensures URL aquarium_id matches the configured aquarium."""
+    return str(aquarium_id) == aquarium_id_from_run
 
 
 def get_current_time():
@@ -16,21 +25,32 @@ def get_current_time():
     return datetime.datetime.now().strftime("%H:%M:%S")
 
 
+# -------------------------
+# Request Models
+# -------------------------
 class FeedRequest(BaseModel):
     food: str  # expects "pellet" or "flakes"
 
 
 class CycleFeedRequest(BaseModel):
     food: str  # expects "pellet" or "flakes"
-    cycle: int  # expects 1 or 2
+    cycle: int  # expects positive integer
 
 
+# -------------------------
+# MANUAL HOLD FEED
+# -------------------------
 @feed_route.post("/aquarium/{aquarium_id}/manual/hold_feed")
-def hold_feed(aquarium_id: int, feed: FeedRequest):
-    """
-    Manual feed route for a specific aquarium.
-    Ensures only one feed operation runs at a time.
-    """
+def hold_feed(aquarium_id: str, feed: FeedRequest):
+
+    # Validate aquarium ID
+    if not validate_aquarium_id(aquarium_id):
+        return JSONResponse(
+            {"Message": f"Invalid aquarium_id '{aquarium_id}', expected '{aquarium_id_from_run}'"},
+            status_code=400
+        )
+
+    # Prevent simultaneous feed operations
     if feed_lock.locked():
         return JSONResponse(
             {"Message": "Feeder is currently running, please wait until it finishes."},
@@ -54,17 +74,25 @@ def hold_feed(aquarium_id: int, feed: FeedRequest):
                 "Message": f"Fed {food} successfully for aquarium {aquarium_id}",
                 "details": result
             })
+
         except Exception as e:
             return JSONResponse({"Message": str(e)}, status_code=500)
 
 
+# -------------------------
+# MANUAL CYCLE FEED
+# -------------------------
 @feed_route.post("/aquarium/{aquarium_id}/manual/cycle_feed")
-def cycle_feed(aquarium_id: int, feed: CycleFeedRequest):
-    """
-    Manual cycle feed route.
-    Accepts JSON like: {"food": "pellet", "cycle": 1–10}
-    Allows user to specify the number of feed cycles.
-    """
+def cycle_feed(aquarium_id: str, feed: CycleFeedRequest):
+
+    # Validate aquarium ID
+    if not validate_aquarium_id(aquarium_id):
+        return JSONResponse(
+            {"Message": f"Invalid aquarium_id '{aquarium_id}', expected '{aquarium_id_from_run}'"},
+            status_code=400
+        )
+
+    # Prevent simultaneous feed operations
     if feed_lock.locked():
         return JSONResponse(
             {"Message": "Feeder is currently running, please wait until it finishes."},
@@ -102,5 +130,6 @@ def cycle_feed(aquarium_id: int, feed: CycleFeedRequest):
                 "Message": f"Fed {food} for {cycles} cycle(s) successfully for aquarium {aquarium_id}",
                 "details": all_results
             })
+
         except Exception as e:
             return JSONResponse({"Message": str(e)}, status_code=500)
