@@ -3,8 +3,8 @@ import asyncio
 import threading
 import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
-from run import aquarium
+from fastapi.responses import StreamingResponse, JSONResponse
+from run import aquarium as aquarium_id_from_run  
 import os
 from dotenv import load_dotenv
 
@@ -16,7 +16,6 @@ TARGET_WIDTH = 320
 TARGET_HEIGHT = 240
 FPS = 15
 JPEG_QUALITY = 20
-
 
 # ---------------------------
 # Camera Manager
@@ -96,14 +95,22 @@ async def generate_frames():
 # ---------------------------
 # MJPEG HTTP Endpoint (fallback)
 # ---------------------------
-@video_route.get("/aquarium/{aquarium}/video_feed")
-async def video_feed(aquarium: str, request: Request):
+@video_route.get("/aquarium/{aquarium_id}/video_feed")
+async def video_feed(aquarium_id: str, request: Request):
     """
     Serve MJPEG stream over HTTP.
     Fallback for browsers that don't support WebSocket.
     """
+    # Check if URL aquarium_id matches the imported aquarium_id
+    if aquarium_id != aquarium_id_from_run:
+        return JSONResponse(
+            {"Message": f"Error: Provided aquarium_id '{aquarium_id}' does not match the expected aquarium_id '{aquarium_id_from_run}'."},
+            status_code=400
+        )
+
     if not camera_manager.running:
         camera_manager.start()
+
     return StreamingResponse(
         generate_frames(),
         media_type="multipart/x-mixed-replace; boundary=frame"
@@ -113,14 +120,19 @@ async def video_feed(aquarium: str, request: Request):
 # ---------------------------
 # WebSocket Streaming Endpoint
 # ---------------------------
-@video_route.websocket("/aquarium/{aquarium}/video_feed_ws")
-async def websocket_video(websocket: WebSocket, aquarium: str):
+@video_route.websocket("/aquarium/{aquarium_id}/video_feed_ws")
+async def websocket_video(websocket: WebSocket, aquarium_id: str):
     """
     Fast WebSocket streaming as binary JPEG frames.
     Connect via: ws:// or wss://
     """
+    # Check if URL aquarium_id matches the imported aquarium_id
+    if aquarium_id != aquarium_id_from_run:
+        await websocket.close(code=1008)  # Close WebSocket connection with error code
+        return
+
     await websocket.accept()
-    print(f"✅ WebSocket client connected to aquarium {aquarium}")
+    print(f"✅ WebSocket client connected to aquarium {aquarium_id}")
 
     if not camera_manager.running:
         camera_manager.start()
@@ -136,7 +148,7 @@ async def websocket_video(websocket: WebSocket, aquarium: str):
             await asyncio.sleep(1 / FPS)
 
     except WebSocketDisconnect:
-        print(f"👋 Client disconnected from aquarium {aquarium}")
+        print(f"👋 Client disconnected from aquarium {aquarium_id}")
     finally:
         camera_manager.stop()
 
@@ -144,13 +156,24 @@ async def websocket_video(websocket: WebSocket, aquarium: str):
 # ---------------------------
 # Camera On/Off Endpoint
 # ---------------------------
-@video_route.post("/aquarium/{aquarium}/camera_switch/{switch}")
-def set_camera_switch(aquarium: str, switch: bool):
+@video_route.post("/aquarium/{aquarium_id}/camera_switch/{switch}")
+def set_camera_switch(aquarium_id: str, switch: bool):
+    """
+    Toggle the camera on/off based on the provided switch value.
+    """
+    # Check if URL aquarium_id matches the imported aquarium_id
+    if aquarium_id != aquarium_id_from_run:
+        return JSONResponse(
+            {"Message": f"Error: Provided aquarium_id '{aquarium_id}' does not match the expected aquarium_id '{aquarium_id_from_run}'."},
+            status_code=400
+        )
+
     try:
         if switch:
             camera_manager.start()
         else:
             camera_manager.stop()
-        return {"Message": f"Camera {'opened' if switch else 'closed'} successfully"}
+
+        return {"Message": f"Camera {'opened' if switch else 'closed'} successfully for aquarium {aquarium_id}"}
     except Exception as e:
         return JSONResponse({"Message": str(e)}, status_code=500)
