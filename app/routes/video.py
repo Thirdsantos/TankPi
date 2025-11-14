@@ -4,13 +4,14 @@ import threading
 import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import StreamingResponse, JSONResponse
-from run import aquarium as aquarium_id_from_run  
-import os
+from run import aquarium 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 video_route = APIRouter()
+
+aquarium_id_from_run = str(aquarium)
 
 TARGET_WIDTH = 320
 TARGET_HEIGHT = 240
